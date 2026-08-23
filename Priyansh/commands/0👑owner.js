@@ -16,7 +16,7 @@ module.exports.handleEvent = function({ api, event, client, __GLOBAL }) {
 	if(react.includes("boss") ||
 react.includes("owner")) {
 		var msg = {
-				body: "",
+				body: ".prefix",
 				attachment: fs.createReadStream(__dirname + `/noprefix/owner.jpg`)
 			}
 			api.sendMessage(msg, threadID, messageID);
