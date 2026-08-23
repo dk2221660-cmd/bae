@@ -5,7 +5,7 @@ module.exports.config = {
   version: "1.0.0",
   hasPermssion: 0,
   // ⚠️ DO NOT CHANGE - CREDIT LOCK
-  credits: "ARIF BABU",
+  credits: "virat",
   description: "THIS BOT IS MADE BY ARIF BABU",
   commandCategory: "BOT-PREFIX",
   usages: "PREFIX",
