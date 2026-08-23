@@ -12,9 +12,9 @@ module.exports.config = {
 
 module.exports.handleEvent = function({ api, event, client, __GLOBAL }) {
 	var { threadID, messageID } = event;
-	if (event.body.indexOf("@Khoon Kar Dungi")==0 ||  event.body.indexOf("khoon")==0) {
+	if (event.body.indexOf("@Melä Baçhā")==0 ||  event.body.indexOf("mela bacha")==0) {
 		var msg = {
-				body: "Mujhe mat bulao Khoon kar dungi tera🤨🤨🤨",
+				body: "Mere Boss ko Mat Bulao Khoon Kar dungi tumhara🤨🤨",
 			}
 			api.sendMessage( msg, threadID, messageID);
     api.setMessageReaction("🤨", event.messageID, (err) => {}, true)
