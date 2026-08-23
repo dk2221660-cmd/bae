@@ -1,5 +1,3 @@
-
-```js
 const axios = require("axios");
 const yts = require("yt-search");
 
