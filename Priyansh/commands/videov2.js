@@ -4,7 +4,7 @@ const axios = require("axios");
 const ytSearch = require("yt-search");
 
 module.exports.config = {
-    name: "videov2",
+    name: "video",
     aliases: ["youtube"],
     version: "1.0.0",
     hasPrefix: true,
