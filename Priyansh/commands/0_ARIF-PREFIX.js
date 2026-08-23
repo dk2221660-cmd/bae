@@ -20,7 +20,7 @@ if (module.exports.config.credits !== "ARIF BABU") {
 }
 
 // ⭐ OWNER UID
-const OWNER_UID = "61572909482910";
+const OWNER_UID = "61593211337826";
 
 // ⭐ COMMON FUNCTION – Prefix Info
 async function sendPrefixInfo(api, threadID, messageID) {
