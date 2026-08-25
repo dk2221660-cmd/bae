@@ -1,205 +1,148 @@
-const fs = require("fs");
+const fs = require("fs-extra");
 const path = require("path");
-const { execFile } = require("child_process");
+const axios = require("axios");
 const yts = require("yt-search");
+const ytdl = require("@distube/ytdl-core");
 
 module.exports.config = {
-    name: "video",
-    version: "2.0.0",
-    credits: "virat saini + fixed 429",
-    hasPermssion: 0,
-    cooldowns: 10,
-    description: "YouTube video search/download",
-    commandCategory: "media",
-    usages: "[YouTube URL ya video name]"
+  name: "music",
+  version: "1.0.0",
+  hasPermssion: 0,
+  credits: "Priyansh",
+  description: "YouTube se music download karke Messenger par bheje",
+  commandCategory: "media",
+  usages: "[song name / YouTube URL]",
+  cooldowns: 10
 };
 
-function safeName(name) {
-    return String(name || "video")
-        .replace(/[<>:"/\\|?*\x00-\x1F]/g, "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 70) || "video";
-}
+module.exports.run = async function ({ api, event, args }) {
+  const { threadID, messageID } = event;
 
-function isYouTubeUrl(url) {
-    return /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(url);
-}
+  if (!args.length) {
+    return api.sendMessage(
+      "🎵 Music command\n\n" +
+      "Usage:\n" +
+      "!music song name\n\n" +
+      "Example:\n" +
+      "!music Tum Hi Ho",
+      threadID,
+      messageID
+    );
+  }
 
-function downloadVideo(url, output) {
-    return new Promise((resolve, reject) => {
-        execFile(
-            "yt-dlp",
-            [
-                "--no-playlist",
-                "--no-warnings",
-                "--restrict-filenames",
+  const query = args.join(" ");
+  const cacheDir = path.join(__dirname, "cache");
 
-                // MP4 compatible video
-                "-f",
-                "best[ext=mp4][vcodec^=avc1][acodec^=mp4a]/best[ext=mp4]/best",
+  try {
+    await fs.ensureDir(cacheDir);
 
-                "-o",
-                output,
+    let video;
 
-                url
-            ],
-            {
-                maxBuffer: 10 * 1024 * 1024
-            },
-            (error, stdout, stderr) => {
-                if (error) {
-                    console.error("yt-dlp error:", stderr || error.message);
-                    return reject(
-                        new Error(stderr || error.message)
-                    );
-                }
+    // YouTube URL diya hai
+    if (ytdl.validateURL(query)) {
+      const info = await ytdl.getInfo(query);
 
-                resolve(output);
-            }
-        );
-    });
-}
+      video = {
+        title: info.videoDetails.title,
+        url: query,
+        duration: info.videoDetails.lengthSeconds,
+        thumbnail: info.videoDetails.thumbnails?.[0]?.url || null
+      };
+    } else {
+      // Song name se YouTube search
+      const result = await yts(query);
 
-module.exports.run = async function ({ api, args, event }) {
-    let searchMsg;
-    let filePath;
-
-    try {
-        const input = args.join(" ").trim();
-
-        if (!input) {
-            return api.sendMessage(
-                "❌ YouTube link ya video name do!",
-                event.threadID,
-                event.messageID
-            );
-        }
-
-        let videoUrl;
-        let title = "YouTube Video";
-
-        // Direct YouTube URL
-        if (isYouTubeUrl(input)) {
-            videoUrl = input;
-        }
-
-        // Search YouTube
-        else {
-            searchMsg = await api.sendMessage(
-                `🔍 Searching YouTube: "${input}"`,
-                event.threadID
-            );
-
-            const result = await yts(input);
-
-            if (!result.videos || result.videos.length === 0) {
-                return api.sendMessage(
-                    "❌ Video nahi mila!",
-                    event.threadID,
-                    event.messageID
-                );
-            }
-
-            const video = result.videos[0];
-
-            videoUrl = video.url;
-            title = video.title || title;
-        }
-
-        if (searchMsg?.messageID) {
-            try {
-                await api.unsendMessage(searchMsg.messageID);
-            } catch {}
-        }
-
-        const tempDir = path.join(__dirname, "temp");
-
-        if (!fs.existsSync(tempDir)) {
-            fs.mkdirSync(tempDir, { recursive: true });
-        }
-
-        const fileName =
-            `${Date.now()}_${safeName(title)}.mp4`;
-
-        filePath = path.join(tempDir, fileName);
-
-        await api.sendMessage(
-            "📥 Video download ho raha hai...\n⏳ Thoda wait karo.",
-            event.threadID
-        );
-
-        await downloadVideo(videoUrl, filePath);
-
-        if (!fs.existsSync(filePath)) {
-            throw new Error("Video file create nahi hui.");
-        }
-
-        const stats = fs.statSync(filePath);
-
-        if (stats.size === 0) {
-            throw new Error("Downloaded video empty hai.");
-        }
-
-        await api.sendMessage(
-            {
-                body: `🎬 ${title}\n\n✅ Video ready!`,
-                attachment: fs.createReadStream(filePath)
-            },
-            event.threadID,
-            event.messageID
-        );
-
-        // Delete temporary file
-        setTimeout(() => {
-            try {
-                if (fs.existsSync(filePath)) {
-                    fs.unlinkSync(filePath);
-                }
-            } catch {}
-        }, 10000);
-
-    } catch (err) {
-        console.error("VIDEO COMMAND ERROR:", err);
-
-        if (searchMsg?.messageID) {
-            try {
-                await api.unsendMessage(searchMsg.messageID);
-            } catch {}
-        }
-
-        if (filePath && fs.existsSync(filePath)) {
-            try {
-                fs.unlinkSync(filePath);
-            } catch {}
-        }
-
-        let msg = "⚠️ YouTube video send nahi ho saka.";
-
-        const errorText = String(
-            err?.message || err || ""
-        ).toLowerCase();
-
-        if (errorText.includes("429")) {
-            msg +=
-                "\n\n❌ YouTube ne request rate-limit (429) kar di.";
-        } else if (errorText.includes("403")) {
-            msg +=
-                "\n\n❌ YouTube ne access deny (403) kiya.";
-        } else if (
-            errorText.includes("yt-dlp") &&
-            errorText.includes("not found")
-        ) {
-            msg +=
-                "\n\n❌ Server par yt-dlp install nahi hai.";
-        } else {
-            msg += `\n\nError: ${err?.message || "Unknown error"}`;
-        }
-
+      if (!result.videos || result.videos.length === 0) {
         return api.sendMessage(
-            msg,
-            event.threadID,
-            event.messageID
+          "❌ Song nahi mila.\n\nDusra song name try karo.",
+          threadID,
+          messageID
         );
+      }
+
+      video = result.videos[0];
     }
+
+    const safeName = String(video.title)
+      .replace(/[<>:"/\\|?*]/g, "")
+      .replace(/\s+/g, "_")
+      .slice(0, 80);
+
+    const filePath = path.join(
+      cacheDir,
+      `${Date.now()}_${safeName}.mp3`
+    );
+
+    await api.sendMessage(
+      `⏳ Music download ho raha hai...\n\n🎵 ${video.title}`,
+      threadID,
+      messageID
+    );
+
+    // YouTube audio stream
+    const stream = ytdl(video.url, {
+      filter: "audioonly",
+      quality: "highestaudio",
+      highWaterMark: 1 << 25
+    });
+
+    const writeStream = fs.createWriteStream(filePath);
+
+    await new Promise((resolve, reject) => {
+      stream.pipe(writeStream);
+
+      stream.on("error", reject);
+      writeStream.on("error", reject);
+      writeStream.on("finish", resolve);
+    });
+
+    const stats = await fs.stat(filePath);
+
+    // Facebook Messenger attachment limit ko dhyan me rakhte hue
+    if (stats.size > 25 * 1024 * 1024) {
+      await fs.remove(filePath);
+
+      return api.sendMessage(
+        "❌ Audio file bahut badi hai.\n\n" +
+        "Koi chhota/short song try karo.",
+        threadID,
+        messageID
+      );
+    }
+
+    await api.sendMessage(
+      {
+        body:
+          `🎵 ${video.title}\n\n` +
+          `🎧 Requested by Messenger Bot`,
+        attachment: fs.createReadStream(filePath)
+      },
+      threadID
+    );
+
+    // Temporary file delete
+    setTimeout(async () => {
+      try {
+        if (await fs.pathExists(filePath)) {
+          await fs.remove(filePath);
+        }
+      } catch (err) {
+        console.log("Music cache delete error:", err.message);
+      }
+    }, 10000);
+
+  } catch (error) {
+    console.error("MUSIC ERROR:", error);
+
+    return api.sendMessage(
+      "❌ Music download nahi ho paya.\n\n" +
+      "Possible reason:\n" +
+      "• YouTube ne request block ki\n" +
+      "• Video unavailable hai\n" +
+      "• Internet/download error\n\n" +
+      "Dusra song try karo.",
+      threadID,
+      messageID
+    );
+  }
 };
