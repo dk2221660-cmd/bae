@@ -1,76 +1,161 @@
-const axios = require("axios");
+const ytdl = require("@distube/ytdl-core");
 const yts = require("yt-search");
 
-const baseApiUrl = async () => {
-    const base = await axios.get(`https://raw.githubusercontent.com/Mostakim0978/D1PT0/refs/heads/main/baseApiUrl.json`);
-    return base.data.api;
-};
-
-(async () => {
-    global.apis = {
-        diptoApi: await baseApiUrl()
-    };
-})();
-
-// Local stream fetch function
-async function getStreamFromURL(url, pathName) {
-    const response = await axios.get(url, { responseType: "stream" });
-    response.data.path = pathName;
-    return response.data;
-}
-
-function getVideoID(url) {
-    const regex = /^(?:https?:\/\/)?(?:m\.|www\.)?(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))((\w|-){11})(?:\S+)?$/;
-    const match = url.match(regex);
-    return match ? match[1] : null;
-}
-
 module.exports.config = {
-    name: "music",
-    version: "1.1.0",
-    credits: "virat saini",
+    name: "video",
+    version: "1.0.0",
+    credits: "virat saini + fixed",
     hasPermssion: 0,
     cooldowns: 5,
-    description: "YouTube video ko URL ya name se MP3 me download karein",
+    description: "YouTube video search/download",
     commandCategory: "media",
-    usages: "[YouTube URL ya song ka naam]"
+    usages: "[YouTube URL ya video name]"
 };
 
-module.exports.run = async function({ api, args, event }) {
+function getVideoId(url) {
     try {
-        let videoID, searchMsg;
-        const url = args[0];
+        return ytdl.getURLVideoID(url);
+    } catch (e) {
+        return null;
+    }
+}
 
-        if (url && (url.includes("youtube.com") || url.includes("youtu.be"))) {
-            videoID = getVideoID(url);
-            if (!videoID) {
-                return api.sendMessage("❌ Galat YouTube URL!", event.threadID, event.messageID);
-            }
-        } else {
-            const query = args.join(" ");
-            if (!query) return api.sendMessage("❌ Song ka naam ya YouTube link do!", event.threadID, event.messageID);
+function safeName(name) {
+    return String(name || "video")
+        .replace(/[<>:"/\\|?*\x00-\x1F]/g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 70) || "video";
+}
 
-            searchMsg = await api.sendMessage(`🔍 Searching: "${query}"`, event.threadID);
-            const result = await yts(query);
-            const videos = result.videos.slice(0, 30);
-            const selected = videos[Math.floor(Math.random() * videos.length)];
-            videoID = selected.videoId;
+module.exports.run = async function ({ api, args, event }) {
+    let searchMsg;
+
+    try {
+        const input = args.join(" ").trim();
+
+        if (!input) {
+            return api.sendMessage(
+                "❌ YouTube link ya video name do!",
+                event.threadID,
+                event.messageID
+            );
         }
 
-        // Change format to mp3
-        const { data: { title, quality, downloadLink } } = await axios.get(`${global.apis.diptoApi}/ytDl3?link=${videoID}&format=mp3`);
+        let videoUrl;
 
-        if (searchMsg?.messageID) api.unsendMessage(searchMsg.messageID);
+        // YouTube URL
+        if (
+            input.includes("youtube.com") ||
+            input.includes("youtu.be")
+        ) {
+            const id = getVideoId(input);
 
-        const shortLink = (await axios.get(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(downloadLink)}`)).data;
+            if (!id) {
+                return api.sendMessage(
+                    "❌ Invalid YouTube URL!",
+                    event.threadID,
+                    event.messageID
+                );
+            }
 
-        return api.sendMessage({
-            body: `🎵 Title: ${title}\n📥 Download: ${shortLink}`,
-            attachment: await getStreamFromURL(downloadLink, `${title}.mp3`)
-        }, event.threadID, event.messageID);
+            videoUrl = `https://www.youtube.com/watch?v=${id}`;
+        }
+
+        // Search by name
+        else {
+            searchMsg = await api.sendMessage(
+                `🔍 Searching YouTube: "${input}"`,
+                event.threadID
+            );
+
+            const result = await yts(input);
+
+            if (!result.videos || result.videos.length === 0) {
+                if (searchMsg?.messageID) {
+                    try {
+                        await api.unsendMessage(searchMsg.messageID);
+                    } catch {}
+                }
+
+                return api.sendMessage(
+                    "❌ Video nahi mila!",
+                    event.threadID,
+                    event.messageID
+                );
+            }
+
+            videoUrl = result.videos[0].url;
+        }
+
+        if (searchMsg?.messageID) {
+            try {
+                await api.unsendMessage(searchMsg.messageID);
+            } catch {}
+        }
+
+        // Get video information
+        const info = await ytdl.getInfo(videoUrl);
+
+        const title =
+            info.videoDetails?.title || "YouTube Video";
+
+        const stream = ytdl(videoUrl, {
+            quality: "18",
+            filter: "audioandvideo",
+            highWaterMark: 1 << 25,
+
+            requestOptions: {
+                headers: {
+                    "User-Agent":
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+                    "Accept-Language":
+                        "en-US,en;q=0.9"
+                }
+            }
+        });
+
+        stream.on("error", (err) => {
+            console.error("YouTube stream error:", err);
+        });
+
+        stream.path = `${safeName(title)}.mp4`;
+
+        return api.sendMessage(
+            {
+                body: `🎬 ${title}\n\n📥 YouTube video`,
+                attachment: stream
+            },
+            event.threadID,
+            event.messageID
+        );
 
     } catch (err) {
-        console.error(err);
-        return api.sendMessage("⚠️ Error: " + (err.message || "Kuch galat ho gaya!"), event.threadID, event.messageID);
+        console.error("VIDEO COMMAND ERROR:", err);
+
+        if (searchMsg?.messageID) {
+            try {
+                await api.unsendMessage(searchMsg.messageID);
+            } catch {}
+        }
+
+        let msg = "⚠️ YouTube video send nahi ho saka.";
+
+        if (
+            err?.statusCode === 403 ||
+            String(err?.message).includes("403")
+        ) {
+            msg +=
+                "\n\n❌ YouTube ne request ko 403 Forbidden diya. " +
+                "Ye YouTube/server-side restriction hai.";
+        } else {
+            msg += `\n\nError: ${err?.message || "Unknown error"}`;
+        }
+
+        return api.sendMessage(
+            msg,
+            event.threadID,
+            event.messageID
+        );
     }
 };
