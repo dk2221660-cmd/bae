@@ -1,24 +1,18 @@
-const ytdl = require("@distube/ytdl-core");
+const fs = require("fs");
+const path = require("path");
+const { execFile } = require("child_process");
 const yts = require("yt-search");
 
 module.exports.config = {
     name: "video",
-    version: "1.0.0",
-    credits: "virat saini + fixed",
+    version: "2.0.0",
+    credits: "virat saini + fixed 429",
     hasPermssion: 0,
-    cooldowns: 5,
+    cooldowns: 10,
     description: "YouTube video search/download",
     commandCategory: "media",
     usages: "[YouTube URL ya video name]"
 };
-
-function getVideoId(url) {
-    try {
-        return ytdl.getURLVideoID(url);
-    } catch (e) {
-        return null;
-    }
-}
 
 function safeName(name) {
     return String(name || "video")
@@ -28,8 +22,48 @@ function safeName(name) {
         .slice(0, 70) || "video";
 }
 
+function isYouTubeUrl(url) {
+    return /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(url);
+}
+
+function downloadVideo(url, output) {
+    return new Promise((resolve, reject) => {
+        execFile(
+            "yt-dlp",
+            [
+                "--no-playlist",
+                "--no-warnings",
+                "--restrict-filenames",
+
+                // MP4 compatible video
+                "-f",
+                "best[ext=mp4][vcodec^=avc1][acodec^=mp4a]/best[ext=mp4]/best",
+
+                "-o",
+                output,
+
+                url
+            ],
+            {
+                maxBuffer: 10 * 1024 * 1024
+            },
+            (error, stdout, stderr) => {
+                if (error) {
+                    console.error("yt-dlp error:", stderr || error.message);
+                    return reject(
+                        new Error(stderr || error.message)
+                    );
+                }
+
+                resolve(output);
+            }
+        );
+    });
+}
+
 module.exports.run = async function ({ api, args, event }) {
     let searchMsg;
+    let filePath;
 
     try {
         const input = args.join(" ").trim();
@@ -43,26 +77,14 @@ module.exports.run = async function ({ api, args, event }) {
         }
 
         let videoUrl;
+        let title = "YouTube Video";
 
-        // YouTube URL
-        if (
-            input.includes("youtube.com") ||
-            input.includes("youtu.be")
-        ) {
-            const id = getVideoId(input);
-
-            if (!id) {
-                return api.sendMessage(
-                    "❌ Invalid YouTube URL!",
-                    event.threadID,
-                    event.messageID
-                );
-            }
-
-            videoUrl = `https://www.youtube.com/watch?v=${id}`;
+        // Direct YouTube URL
+        if (isYouTubeUrl(input)) {
+            videoUrl = input;
         }
 
-        // Search by name
+        // Search YouTube
         else {
             searchMsg = await api.sendMessage(
                 `🔍 Searching YouTube: "${input}"`,
@@ -72,12 +94,6 @@ module.exports.run = async function ({ api, args, event }) {
             const result = await yts(input);
 
             if (!result.videos || result.videos.length === 0) {
-                if (searchMsg?.messageID) {
-                    try {
-                        await api.unsendMessage(searchMsg.messageID);
-                    } catch {}
-                }
-
                 return api.sendMessage(
                     "❌ Video nahi mila!",
                     event.threadID,
@@ -85,7 +101,10 @@ module.exports.run = async function ({ api, args, event }) {
                 );
             }
 
-            videoUrl = result.videos[0].url;
+            const video = result.videos[0];
+
+            videoUrl = video.url;
+            title = video.title || title;
         }
 
         if (searchMsg?.messageID) {
@@ -94,41 +113,51 @@ module.exports.run = async function ({ api, args, event }) {
             } catch {}
         }
 
-        // Get video information
-        const info = await ytdl.getInfo(videoUrl);
+        const tempDir = path.join(__dirname, "temp");
 
-        const title =
-            info.videoDetails?.title || "YouTube Video";
+        if (!fs.existsSync(tempDir)) {
+            fs.mkdirSync(tempDir, { recursive: true });
+        }
 
-        const stream = ytdl(videoUrl, {
-            quality: "18",
-            filter: "audioandvideo",
-            highWaterMark: 1 << 25,
+        const fileName =
+            `${Date.now()}_${safeName(title)}.mp4`;
 
-            requestOptions: {
-                headers: {
-                    "User-Agent":
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-                    "Accept-Language":
-                        "en-US,en;q=0.9"
-                }
-            }
-        });
+        filePath = path.join(tempDir, fileName);
 
-        stream.on("error", (err) => {
-            console.error("YouTube stream error:", err);
-        });
+        await api.sendMessage(
+            "📥 Video download ho raha hai...\n⏳ Thoda wait karo.",
+            event.threadID
+        );
 
-        stream.path = `${safeName(title)}.mp4`;
+        await downloadVideo(videoUrl, filePath);
 
-        return api.sendMessage(
+        if (!fs.existsSync(filePath)) {
+            throw new Error("Video file create nahi hui.");
+        }
+
+        const stats = fs.statSync(filePath);
+
+        if (stats.size === 0) {
+            throw new Error("Downloaded video empty hai.");
+        }
+
+        await api.sendMessage(
             {
-                body: `🎬 ${title}\n\n📥 YouTube video`,
-                attachment: stream
+                body: `🎬 ${title}\n\n✅ Video ready!`,
+                attachment: fs.createReadStream(filePath)
             },
             event.threadID,
             event.messageID
         );
+
+        // Delete temporary file
+        setTimeout(() => {
+            try {
+                if (fs.existsSync(filePath)) {
+                    fs.unlinkSync(filePath);
+                }
+            } catch {}
+        }, 10000);
 
     } catch (err) {
         console.error("VIDEO COMMAND ERROR:", err);
@@ -139,15 +168,30 @@ module.exports.run = async function ({ api, args, event }) {
             } catch {}
         }
 
+        if (filePath && fs.existsSync(filePath)) {
+            try {
+                fs.unlinkSync(filePath);
+            } catch {}
+        }
+
         let msg = "⚠️ YouTube video send nahi ho saka.";
 
-        if (
-            err?.statusCode === 403 ||
-            String(err?.message).includes("403")
+        const errorText = String(
+            err?.message || err || ""
+        ).toLowerCase();
+
+        if (errorText.includes("429")) {
+            msg +=
+                "\n\n❌ YouTube ne request rate-limit (429) kar di.";
+        } else if (errorText.includes("403")) {
+            msg +=
+                "\n\n❌ YouTube ne access deny (403) kiya.";
+        } else if (
+            errorText.includes("yt-dlp") &&
+            errorText.includes("not found")
         ) {
             msg +=
-                "\n\n❌ YouTube ne request ko 403 Forbidden diya. " +
-                "Ye YouTube/server-side restriction hai.";
+                "\n\n❌ Server par yt-dlp install nahi hai.";
         } else {
             msg += `\n\nError: ${err?.message || "Unknown error"}`;
         }
