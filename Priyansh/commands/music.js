@@ -1,28 +1,32 @@
 const fs = require("fs-extra");
 const path = require("path");
 const yts = require("yt-search");
-const { YtDlp } = require("ytdlp-nodejs");
 
 module.exports.config = {
-  name: "music",
-  version: "3.0.0",
+  name: "song",
+  version: "1.0.0",
   hasPermssion: 0,
   credits: "Priyansh",
   description: "YouTube se song download karke direct Messenger audio bheje",
   commandCategory: "media",
-  usages: "[song name / YouTube URL]",
-  cooldowns: 10
+  usages: "[song name]",
+  cooldowns: 10,
+
+  dependencies: {
+    "ytdlp-nodejs": "*"
+  }
 };
 
 module.exports.run = async function ({ api, event, args }) {
+
   const { threadID, messageID } = event;
 
-  if (!args.length) {
+  if (!args || !args.length) {
     return api.sendMessage(
-      "🎵 MUSIC\n\n" +
+      "🎵 SONG COMMAND\n\n" +
+      "Song ka naam likho.\n\n" +
       "Example:\n" +
-      ".music dil ke armaan\n\n" +
-      "YouTube URL bhi de sakte ho.",
+      ".song dil ke armaan",
       threadID,
       messageID
     );
@@ -32,132 +36,172 @@ module.exports.run = async function ({ api, event, args }) {
   const cacheDir = path.join(__dirname, "cache");
 
   try {
+
     await fs.ensureDir(cacheDir);
 
-    let youtubeUrl;
+    let youtubeURL;
     let title;
 
-    // Direct YouTube link
+    // Direct YouTube URL
     if (
-      query.includes("youtube.com/watch") ||
-      query.includes("youtu.be/")
+      /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(query)
     ) {
-      youtubeUrl = query;
-      title = "YouTube Music";
+
+      youtubeURL = query;
+      title = "YouTube Song";
+
     } else {
+
       // YouTube search
       const search = await yts(query);
 
-      if (!search.videos || !search.videos.length) {
+      if (!search.videos || search.videos.length === 0) {
+
         return api.sendMessage(
-          "❌ Song nahi mila.",
+          "❌ Song nahi mila.\n\nDusra song try karo.",
           threadID,
           messageID
         );
+
       }
 
       const video = search.videos[0];
 
-      youtubeUrl = video.url;
+      youtubeURL = video.url;
       title = video.title;
     }
 
     await api.sendMessage(
-      `⏳ Music download ho raha hai...\n\n🎵 ${title}`,
+      "⏳ Song download ho raha hai...\n\n" +
+      "🎵 " + title,
       threadID,
       messageID
     );
 
-    console.log("🎵 MUSIC URL:", youtubeUrl);
+    console.log("================================");
+    console.log("🎵 SONG TITLE:", title);
+    console.log("🔗 YOUTUBE URL:", youtubeURL);
+    console.log("================================");
+
+    // Downloader load
+    const downloaderModule = require("ytdlp-nodejs");
+
+    const YtDlp =
+      downloaderModule.YtDlp ||
+      downloaderModule.default ||
+      downloaderModule;
 
     const downloader = new YtDlp();
 
-    /*
-     * Audio download
-     */
+    // Audio download
     const result = await downloader
-      .downloadAudio(youtubeUrl, "mp3")
+      .downloadAudio(youtubeURL, "mp3")
       .run();
 
-    console.log("🎵 DOWNLOAD RESULT:", result);
+    console.log("🎵 DOWNLOAD RESULT:");
+    console.log(result);
 
-    /*
-     * ytdlp-nodejs normally returns filePaths
-     */
-    let downloadedFile = null;
+    let filePath = null;
 
-    if (result && Array.isArray(result.filePaths)) {
-      downloadedFile = result.filePaths[0];
-    }
-
+    // Different result formats handle
     if (
-      !downloadedFile &&
       result &&
-      Array.isArray(result.files)
+      Array.isArray(result.filePaths) &&
+      result.filePaths.length > 0
     ) {
-      downloadedFile = result.files[0];
+
+      filePath = result.filePaths[0];
+
+    } else if (
+      result &&
+      Array.isArray(result.files) &&
+      result.files.length > 0
+    ) {
+
+      filePath = result.files[0];
+
+    } else if (typeof result === "string") {
+
+      filePath = result;
+
     }
 
-    if (!downloadedFile) {
+    if (!filePath) {
       throw new Error(
-        "Audio download hua lekin file path nahi mila."
+        "Downloader ne audio file ka path return nahi kiya."
       );
     }
 
-    console.log("🎵 DOWNLOADED FILE:", downloadedFile);
+    console.log("📁 AUDIO FILE:", filePath);
 
-    if (!await fs.pathExists(downloadedFile)) {
+    // File exists?
+    if (!await fs.pathExists(filePath)) {
       throw new Error(
-        "Downloaded audio file exist nahi karti."
+        "Downloaded audio file nahi mili."
       );
     }
 
-    const stat = await fs.stat(downloadedFile);
+    const stats = await fs.stat(filePath);
 
-    if (stat.size < 1000) {
+    if (stats.size < 1000) {
       throw new Error(
-        "Downloaded audio file empty/corrupt hai."
+        "Downloaded audio empty ya corrupt hai."
       );
     }
 
-    /*
-     * Messenger par DIRECT AUDIO
-     */
-    await api.sendMessage(
-      {
-        body: `🎵 ${title}`,
-        attachment: fs.createReadStream(downloadedFile)
-      },
-      threadID,
-      messageID
+    console.log(
+      "📦 FILE SIZE:",
+      (stats.size / 1024 / 1024).toFixed(2),
+      "MB"
     );
 
-    console.log("✅ MUSIC SENT SUCCESSFULLY");
+    // Messenger DIRECT AUDIO
+    await api.sendMessage(
+      {
+        body: "🎵 " + title,
+        attachment: fs.createReadStream(filePath)
+      },
+      threadID
+    );
 
-    /*
-     * Temporary file delete
-     */
+    console.log("✅ SONG SENT SUCCESSFULLY");
+
+    // Delete temporary file
     setTimeout(async () => {
+
       try {
-        if (await fs.pathExists(downloadedFile)) {
-          await fs.remove(downloadedFile);
-          console.log("🗑️ Music cache deleted");
+
+        if (await fs.pathExists(filePath)) {
+
+          await fs.remove(filePath);
+
+          console.log(
+            "🗑️ Temporary audio deleted."
+          );
+
         }
+
       } catch (error) {
+
         console.log(
           "Cache delete error:",
           error.message
         );
+
       }
+
     }, 15000);
 
   } catch (error) {
-    console.error("========== MUSIC ERROR ==========");
+
+    console.error("");
+    console.error("========== SONG ERROR ==========");
     console.error(error);
-    console.error("=================================");
+    console.error("================================");
+    console.error("");
 
     return api.sendMessage(
-      "❌ Music download nahi ho paya.\n\n" +
+      "❌ Song download nahi ho paya.\n\n" +
       "Error:\n" +
       (error.message || "Unknown error"),
       threadID,
