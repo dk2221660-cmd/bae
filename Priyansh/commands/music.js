@@ -2,145 +2,332 @@ const fs = require("fs-extra");
 const path = require("path");
 const axios = require("axios");
 const yts = require("yt-search");
-const ytdl = require("@distube/ytdl-core");
+
+const { downloadVideo } = require("priyansh-all-dl");
 
 module.exports.config = {
   name: "music",
-  version: "1.0.0",
+  version: "2.0.0",
   hasPermssion: 0,
   credits: "Priyansh",
-  description: "YouTube se music download karke Messenger par bheje",
+  description: "YouTube song download karke Messenger par direct audio bheje",
   commandCategory: "media",
   usages: "[song name / YouTube URL]",
   cooldowns: 10
 };
 
 module.exports.run = async function ({ api, event, args }) {
+
   const { threadID, messageID } = event;
 
   if (!args.length) {
     return api.sendMessage(
-      "🎵 Music command\n\n" +
-      "Usage:\n" +
-      "!music song name\n\n" +
+      "🎵 MUSIC\n\n" +
+      "Song ka naam likho.\n\n" +
       "Example:\n" +
-      "!music Tum Hi Ho",
+      ".music don\n\n" +
+      "Ya YouTube link:\n" +
+      ".music https://youtu.be/xxxx",
       threadID,
       messageID
     );
   }
 
   const query = args.join(" ");
+
   const cacheDir = path.join(__dirname, "cache");
 
   try {
+
     await fs.ensureDir(cacheDir);
 
-    let video;
+    let youtubeUrl;
+    let title = query;
 
-    // YouTube URL diya hai
-    if (ytdl.validateURL(query)) {
-      const info = await ytdl.getInfo(query);
+    /*
+     * STEP 1
+     * Agar direct YouTube URL diya hai
+     */
+    if (
+      query.includes("youtube.com/watch") ||
+      query.includes("youtu.be/")
+    ) {
 
-      video = {
-        title: info.videoDetails.title,
-        url: query,
-        duration: info.videoDetails.lengthSeconds,
-        thumbnail: info.videoDetails.thumbnails?.[0]?.url || null
-      };
+      youtubeUrl = query;
+
     } else {
-      // Song name se YouTube search
-      const result = await yts(query);
 
-      if (!result.videos || result.videos.length === 0) {
+      /*
+       * STEP 2
+       * Song name se YouTube search
+       */
+
+      const search = await yts(query);
+
+      if (!search.videos || search.videos.length === 0) {
+
         return api.sendMessage(
-          "❌ Song nahi mila.\n\nDusra song name try karo.",
+          "❌ Song nahi mila.\n\nDusra song try karo.",
           threadID,
           messageID
         );
+
       }
 
-      video = result.videos[0];
+      const video = search.videos[0];
+
+      youtubeUrl = video.url;
+      title = video.title;
     }
 
-    const safeName = String(video.title)
-      .replace(/[<>:"/\\|?*]/g, "")
-      .replace(/\s+/g, "_")
-      .slice(0, 80);
-
-    const filePath = path.join(
-      cacheDir,
-      `${Date.now()}_${safeName}.mp3`
-    );
-
     await api.sendMessage(
-      `⏳ Music download ho raha hai...\n\n🎵 ${video.title}`,
+      `⏳ Music download ho raha hai...\n\n🎵 ${title}`,
       threadID,
       messageID
     );
 
-    // YouTube audio stream
-    const stream = ytdl(video.url, {
-      filter: "audioonly",
-      quality: "highestaudio",
-      highWaterMark: 1 << 25
-    });
+    console.log("MUSIC URL:", youtubeUrl);
 
-    const writeStream = fs.createWriteStream(filePath);
+    /*
+     * STEP 3
+     * priyansh-all-dl se AUDIO download
+     */
 
-    await new Promise((resolve, reject) => {
-      stream.pipe(writeStream);
+    const result = await downloadVideo(
+      youtubeUrl,
+      {
+        format: "audio"
+      }
+    );
 
-      stream.on("error", reject);
-      writeStream.on("error", reject);
-      writeStream.on("finish", resolve);
-    });
+    console.log("MUSIC RESULT:", result);
 
-    const stats = await fs.stat(filePath);
+    /*
+     * Package ke different possible result formats
+     */
 
-    // Facebook Messenger attachment limit ko dhyan me rakhte hue
-    if (stats.size > 25 * 1024 * 1024) {
-      await fs.remove(filePath);
+    let downloadUrl = null;
+    let localFile = null;
 
-      return api.sendMessage(
-        "❌ Audio file bahut badi hai.\n\n" +
-        "Koi chhota/short song try karo.",
-        threadID,
-        messageID
+    if (typeof result === "string") {
+
+      if (
+        result.startsWith("http://") ||
+        result.startsWith("https://")
+      ) {
+        downloadUrl = result;
+      } else if (await fs.pathExists(result)) {
+        localFile = result;
+      }
+
+    }
+
+    if (result && typeof result === "object") {
+
+      downloadUrl =
+        result.url ||
+        result.downloadUrl ||
+        result.download_url ||
+        result.audio ||
+        result.audioUrl ||
+        result.link ||
+        result.fileUrl ||
+        result.file ||
+        null;
+
+      if (!downloadUrl && result.data) {
+
+        if (typeof result.data === "string") {
+
+          if (
+            result.data.startsWith("http://") ||
+            result.data.startsWith("https://")
+          ) {
+            downloadUrl = result.data;
+          }
+
+        } else if (typeof result.data === "object") {
+
+          downloadUrl =
+            result.data.url ||
+            result.data.downloadUrl ||
+            result.data.download_url ||
+            result.data.audio ||
+            result.data.audioUrl ||
+            result.data.file ||
+            null;
+        }
+      }
+    }
+
+    /*
+     * STEP 4
+     * Agar package ne local file di hai
+     */
+
+    if (localFile) {
+
+      const stat = await fs.stat(localFile);
+
+      if (stat.size < 1000) {
+        throw new Error("Downloaded audio file invalid hai.");
+      }
+
+      await api.sendMessage(
+        {
+          body: `🎵 ${title}`,
+          attachment: fs.createReadStream(localFile)
+        },
+        threadID
+      );
+
+      setTimeout(async () => {
+
+        try {
+
+          if (await fs.pathExists(localFile)) {
+            await fs.remove(localFile);
+          }
+
+        } catch (e) {
+          console.log("Cache delete error:", e.message);
+        }
+
+      }, 10000);
+
+      return;
+    }
+
+    /*
+     * STEP 5
+     * Agar package ne download URL diya hai
+     */
+
+    if (!downloadUrl) {
+
+      console.log(
+        "DOWNLOAD RESULT KEYS:",
+        result && typeof result === "object"
+          ? Object.keys(result)
+          : typeof result
+      );
+
+      throw new Error(
+        "Downloader ne audio URL/file return nahi ki."
       );
     }
+
+    /*
+     * STEP 6
+     * Audio ko local cache mein save karo
+     */
+
+    const safeTitle = String(title)
+      .replace(/[<>:"/\\|?*]/g, "")
+      .replace(/\s+/g, "_")
+      .slice(0, 70);
+
+    const filePath = path.join(
+      cacheDir,
+      `${Date.now()}_${safeTitle}.mp3`
+    );
+
+    console.log("AUDIO URL:", downloadUrl);
+
+    const response = await axios({
+      method: "GET",
+      url: downloadUrl,
+      responseType: "stream",
+      timeout: 120000,
+      maxContentLength: 50 * 1024 * 1024,
+      maxBodyLength: 50 * 1024 * 1024
+    });
+
+    const writer = fs.createWriteStream(filePath);
+
+    response.data.pipe(writer);
+
+    await new Promise((resolve, reject) => {
+
+      writer.on("finish", resolve);
+      writer.on("error", reject);
+      response.data.on("error", reject);
+
+    });
+
+    /*
+     * STEP 7
+     * Check downloaded file
+     */
+
+    const stat = await fs.stat(filePath);
+
+    if (stat.size < 1000) {
+
+      await fs.remove(filePath);
+
+      throw new Error(
+        "Audio file empty/corrupt hai."
+      );
+    }
+
+    /*
+     * STEP 8
+     * Messenger par DIRECT AUDIO bhejo
+     */
 
     await api.sendMessage(
       {
         body:
-          `🎵 ${video.title}\n\n` +
-          `🎧 Requested by Messenger Bot`,
+          `🎵 ${title}\n\n` +
+          `🎧 Music downloaded successfully`,
         attachment: fs.createReadStream(filePath)
       },
       threadID
     );
 
-    // Temporary file delete
+    /*
+     * STEP 9
+     * Temporary file delete
+     */
+
     setTimeout(async () => {
+
       try {
+
         if (await fs.pathExists(filePath)) {
           await fs.remove(filePath);
         }
-      } catch (err) {
-        console.log("Music cache delete error:", err.message);
+
+      } catch (e) {
+
+        console.log(
+          "Music cache delete error:",
+          e.message
+        );
+
       }
+
     }, 10000);
 
   } catch (error) {
-    console.error("MUSIC ERROR:", error);
+
+    console.error(
+      "========== MUSIC ERROR =========="
+    );
+
+    console.error(error);
+
+    console.error(
+      "================================="
+    );
 
     return api.sendMessage(
       "❌ Music download nahi ho paya.\n\n" +
-      "Possible reason:\n" +
-      "• YouTube ne request block ki\n" +
-      "• Video unavailable hai\n" +
-      "• Internet/download error\n\n" +
-      "Dusra song try karo.",
+      "Error: " +
+      (error.message || "Unknown error") +
+      "\n\n" +
+      "Console/terminal mein complete error check karo.",
       threadID,
       messageID
     );
