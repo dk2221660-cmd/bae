@@ -1,126 +1,76 @@
-const fs = require("fs");
-const path = require("path");
+const axios = require("axios");
 const yts = require("yt-search");
-const ytdl = require("@distube/ytdl-core");
+
+const baseApiUrl = async () => {
+    const base = await axios.get(`https://raw.githubusercontent.com/Mostakim0978/D1PT0/refs/heads/main/baseApiUrl.json`);
+    return base.data.api;
+};
+
+(async () => {
+    global.apis = {
+        diptoApi: await baseApiUrl()
+    };
+})();
+
+// Local stream fetch function
+async function getStreamFromURL(url, pathName) {
+    const response = await axios.get(url, { responseType: "stream" });
+    response.data.path = pathName;
+    return response.data;
+}
+
+function getVideoID(url) {
+    const regex = /^(?:https?:\/\/)?(?:m\.|www\.)?(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))((\w|-){11})(?:\S+)?$/;
+    const match = url.match(regex);
+    return match ? match[1] : null;
+}
 
 module.exports.config = {
     name: "music",
-    version: "3.0.0",
-    credits: "virat saini + fixed",
+    version: "1.1.0",
+    credits: "virat saini",
     hasPermssion: 0,
     cooldowns: 5,
-    description: "YouTube se song audio bheje",
+    description: "YouTube video ko URL ya name se MP3 me download karein",
     commandCategory: "media",
-    usages: "[song name]"
+    usages: "[YouTube URL ya song ka naam]"
 };
 
-module.exports.run = async function ({ api, args, event }) {
-    let filePath = null;
-
+module.exports.run = async function({ api, args, event }) {
     try {
-        const query = args.join(" ").trim();
+        let videoID, searchMsg;
+        const url = args[0];
 
-        if (!query) {
-            return api.sendMessage(
-                "❌ Song ka naam do!\nExample: music tum hi ho",
-                event.threadID,
-                event.messageID
-            );
-        }
-
-        const result = await yts(query);
-
-        if (!result.videos || result.videos.length === 0) {
-            return api.sendMessage(
-                "❌ Song nahi mila!",
-                event.threadID,
-                event.messageID
-            );
-        }
-
-        const video = result.videos[0];
-
-        if (!video.url || !ytdl.validateURL(video.url)) {
-            return api.sendMessage(
-                "❌ YouTube video nahi mila.",
-                event.threadID,
-                event.messageID
-            );
-        }
-
-        await api.sendMessage(
-            `⬇️ Downloading...\n🎵 ${video.title}`,
-            event.threadID
-        );
-
-        const tempDir = path.join(__dirname, "music_temp");
-
-        if (!fs.existsSync(tempDir)) {
-            fs.mkdirSync(tempDir, { recursive: true });
-        }
-
-        filePath = path.join(
-            tempDir,
-            `song_${Date.now()}.webm`
-        );
-
-        await downloadAudio(video.url, filePath);
-
-        if (!fs.existsSync(filePath)) {
-            throw new Error("Audio download nahi hua.");
-        }
-
-        await api.sendMessage(
-            {
-                body: `🎵 ${video.title}`,
-                attachment: fs.createReadStream(filePath)
-            },
-            event.threadID,
-            event.messageID
-        );
-
-        setTimeout(() => {
-            try {
-                if (fs.existsSync(filePath)) {
-                    fs.unlinkSync(filePath);
-                }
-            } catch (e) {}
-        }, 15000);
-
-    } catch (error) {
-        console.error("MUSIC ERROR:", error);
-
-        try {
-            if (filePath && fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath);
+        if (url && (url.includes("youtube.com") || url.includes("youtu.be"))) {
+            videoID = getVideoID(url);
+            if (!videoID) {
+                return api.sendMessage("❌ Galat YouTube URL!", event.threadID, event.messageID);
             }
-        } catch (e) {}
+        } else {
+            const query = args.join(" ");
+            if (!query) return api.sendMessage("❌ Song ka naam ya YouTube link do!", event.threadID, event.messageID);
 
-        return api.sendMessage(
-            "❌ Song send nahi ho paya.\n" +
-            "Error: " + (error.message || "Unknown error"),
-            event.threadID,
-            event.messageID
-        );
+            searchMsg = await api.sendMessage(`🔍 Searching: "${query}"`, event.threadID);
+            const result = await yts(query);
+            const videos = result.videos.slice(0, 30);
+            const selected = videos[Math.floor(Math.random() * videos.length)];
+            videoID = selected.videoId;
+        }
+
+        // Change format to mp3
+        const { data: { title, quality, downloadLink } } = await axios.get(`${global.apis.diptoApi}/ytDl3?link=${videoID}&format=mp3`);
+
+        if (searchMsg?.messageID) api.unsendMessage(searchMsg.messageID);
+
+        const shortLink = (await axios.get(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(downloadLink)}`)).data;
+
+        return api.sendMessage({
+            body: `🎵 Title: ${title}\n📥 Download: ${shortLink}`,
+            attachment: await getStreamFromURL(downloadLink, `${title}.mp3`)
+        }, event.threadID, event.messageID);
+
+    } catch (err) {
+        console.error(err);
+        return api.sendMessage("⚠️ Error: " + (err.message || "Kuch galat ho gaya!"), event.threadID, event.messageID);
     }
 };
-
-function downloadAudio(url, output) {
-    return new Promise((resolve, reject) => {
-
-        const stream = ytdl(url, {
-            filter: "audioonly",
-            quality: "highestaudio",
-            highWaterMark: 1 << 25
-        });
-
-        const writeStream = fs.createWriteStream(output);
-
-        stream.on("error", reject);
-        writeStream.on("error", reject);
-
-        writeStream.on("finish", resolve);
-
-        stream.pipe(writeStream);
-    });
-}
